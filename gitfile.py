@@ -3,13 +3,16 @@ import yaml
 import gitlab
 import pandas as pd
 from tqdm import tqdm
+from typing import List, Dict
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
+
+from gitlab.v4.objects.projects import Project
 
 from config import Settings
 
 
-def get_project_file_paths(project, branch_name, path=''):
+def get_project_file_paths(project: Project, branch_name: str, path: str = '') -> List[str]:
     file_paths = []
     items = project.repository_tree(path=path, all=True, recursive=False, ref=branch_name)
     for item in items:
@@ -20,13 +23,13 @@ def get_project_file_paths(project, branch_name, path=''):
     return file_paths
 
 
-def is_conventional_commit(message):
+def is_conventional_commit(message: str) -> bool:
     pattern = r'^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\(\S+\))?: .{1,}'
     return re.match(pattern, message) is not None
 
 
 # Function to calculate the percentage of conventional commits by each user for a given project
-def calculate_conventional_commit_percentage(project):
+def calculate_conventional_commit_percentage(project: Project) -> Dict[str, float]:
     # Get commits from the project
     commits = project.commits.list(all=True)
 
@@ -51,16 +54,16 @@ def calculate_conventional_commit_percentage(project):
     return percentage_conventional_by_user
 
 
-def get_commits_by_branch(project):
+def get_num_commits_by_branch(project: Project) -> Dict[str: int]:
     branches_commits = {}
     branches = project.branches.list(all=True)
     for branch in branches:
         commits = project.commits.list(all=True, query_parameters={'ref_name': branch.name})
-        branches_commits[branch.name] = [commit.id for commit in commits]
+        branches_commits[branch.name] = len(commits)
     return branches_commits
 
 
-def get_ci_cd_stages(project, branch_name='main'):
+def get_ci_cd_stages(project: Project, branch_name='main') -> List[str]:
     try:
         # Get the file content
         file_content = project.files.get(file_path='.gitlab-ci.yml', ref=branch_name)
@@ -73,7 +76,7 @@ def get_ci_cd_stages(project, branch_name='main'):
         return None
 
 
-def has_tests(project):
+def has_tests(project: Project) -> bool:
     items = project.repository_tree(all=True)
     for item in items:
         if item['type'] == 'tree' and item['name'].lower() == 'tests':
@@ -81,11 +84,11 @@ def has_tests(project):
     return False
 
 
-def process_project(project):
+def process_project(project: Project) -> Dict[str, str] | None:
     try:
         main_developers = Counter([x.author_name for x in project.commits.list(get_all=True, all=True)])
-        commit_per_branch = get_commits_by_branch(project)
-        most_commited_branch = max(commit_per_branch, key=commit_per_branch.get)
+        num_commit_per_branch = get_num_commits_by_branch(project)
+        most_commited_branch = max(num_commit_per_branch, key=num_commit_per_branch.get)
         project_files = get_project_file_paths(project, branch_name=most_commited_branch)
         project_data = {
             'Name': project.name,
@@ -93,7 +96,7 @@ def process_project(project):
             'Creation Date': project.created_at.split('T')[0],
             'Number of Commits': len(project.commits.list(get_all=True, all=True)),
             'Number of Branches': len(project.branches.list(get_all=True, all=True)),
-            'Commits per Branch': commit_per_branch,
+            'Commits per Branch': num_commit_per_branch,
             'Conventional Commits Status': calculate_conventional_commit_percentage(project),
             'Default Branch': project.default_branch,
             'Most Commited Branch': most_commited_branch,
@@ -113,23 +116,15 @@ def process_project(project):
         return None
 
 
-def get_language_percentages(project):
+def get_language_percentages(project: Project) -> Dict[str, float]:
     percentages = project.languages()
-    # total_bytes = sum(languages.values())
-    # percentages = {language: (bytes / total_bytes * 100) for language, bytes in languages.items()}
     return percentages
 
 
 if __name__ == '__main__':
     settings = Settings()
-    # Process projects in parallel
-    # Connect to GitLab
     gl = gitlab.Gitlab(settings.gitlab_url, private_token=settings.access_token)
-
-    # Get all projects
     projects = gl.projects.list(all=True)
-
-    # Group projects by group
     grouped_projects = {}
     for project in projects:
         group_name = project.namespace['name']
@@ -155,7 +150,7 @@ if __name__ == '__main__':
             # Write to a different sheet
             df.to_excel(writer, sheet_name=group)
     # with ThreadPoolExecutor(max_workers=10) as executor:  # Adjust max_workers as needed
-    #     future_to_project = {executor.submit(process_project, project): project for project in projects}
+    #     future_to_project = {executor.submit(process_project, project: Project): project for project in projects}
     #     for future in as_completed(future_to_project):
     #         project = future_to_project[future]
     #         try:
