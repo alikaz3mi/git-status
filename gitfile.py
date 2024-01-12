@@ -10,6 +10,9 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from gitlab.v4.objects.projects import Project
 
 from config import Settings
+from utils.basic_logger import simple_logger
+
+logger = simple_logger(__name__)
 
 
 def get_project_file_paths(project: Project, branch_name: str, path: str = '') -> List[str]:
@@ -54,7 +57,7 @@ def calculate_conventional_commit_percentage(project: Project) -> Dict[str, floa
     return percentage_conventional_by_user
 
 
-def get_num_commits_by_branch(project: Project) -> Dict[str: int]:
+def get_num_commits_by_branch(project: Project) -> Dict[str, int]:
     branches_commits = {}
     branches = project.branches.list(all=True)
     for branch in branches:
@@ -86,12 +89,13 @@ def has_tests(project: Project) -> bool:
 
 def process_project(project: Project) -> Dict[str, str] | None:
     try:
-        main_developers = Counter([x.author_name for x in project.commits.list(get_all=True, all=True)])
+        main_developers = dict(Counter([x.author_name for x in project.commits.list(get_all=True, all=True)]))
         num_commit_per_branch = get_num_commits_by_branch(project)
-        most_commited_branch = max(num_commit_per_branch, key=num_commit_per_branch.get)
-        project_files = get_project_file_paths(project, branch_name=most_commited_branch)
+        most_committed_branch = max(num_commit_per_branch, key=num_commit_per_branch.get)
+        project_files = get_project_file_paths(project, branch_name=most_committed_branch)
         project_data = {
             'Name': project.name,
+            'Group Name': project.namespace['name'],
             'Link': project.web_url,
             'Creation Date': project.created_at.split('T')[0],
             'Number of Commits': len(project.commits.list(get_all=True, all=True)),
@@ -99,7 +103,7 @@ def process_project(project: Project) -> Dict[str, str] | None:
             'Commits per Branch': num_commit_per_branch,
             'Conventional Commits Status': calculate_conventional_commit_percentage(project),
             'Default Branch': project.default_branch,
-            'Most Commited Branch': most_commited_branch,
+            'Most Committed Branch': most_committed_branch,
             'Main Developers': main_developers,
             'Has Docker': 'yes' if sum([1 for file in project_files if 'dockerfile' in file]) else 'no',
             'Has docker-compose': 'yes' if sum([1 for file in project_files if 'docker-compose' in file]) else 'no',
@@ -112,7 +116,7 @@ def process_project(project: Project) -> Dict[str, str] | None:
         }
         return project_data
     except Exception as e:
-        print(f'Error in getting {project.name} data: {e}')
+        logger.error(f'Error in getting {project.name} data: {e}')
         return None
 
 
@@ -130,33 +134,22 @@ if __name__ == '__main__':
         group_name = project.namespace['name']
         if group_name not in grouped_projects:
             grouped_projects[group_name] = []
-        grouped_projects[group_name].append(project)
 
-    # For each group, create a DataFrame and save it to an Excel file
+    with ThreadPoolExecutor(max_workers=10) as executor:  # Adjust max_workers as needed
+        future_to_project = {executor.submit(process_project, project): project for project in projects}
+        for future in as_completed(future_to_project):
+            project = future_to_project[future]
+            try:
+                project_data = future.result()
+                if project_data:
+                    # Process the data (e.g., append it to a DataFrame or list)
+                    grouped_projects[project_data['Group Name']].append(project_data)
+            except Exception as e:
+                logger.error(f'Error processing project {project.name}: {e}')
+
     with pd.ExcelWriter('./gitlab_projects.xlsx') as writer:
-        for group, projects in grouped_projects.items():
-            data = []
-            print(f'group name = {group}')
-            for project in tqdm(projects):
-                try:
-                    project_data = process_project(project=project)
-                    data.append(project_data)
-                except Exception as e:
-                    print(f'Error in getting {project.name} data: {e}')
+        for sheet_name, records in grouped_projects.items():
+            df = pd.DataFrame(records)
+            df.to_excel(writer, sheet_name=sheet_name, index=False)
 
-            # Convert to DataFrame
-            df = pd.DataFrame(data)
 
-            # Write to a different sheet
-            df.to_excel(writer, sheet_name=group)
-    # with ThreadPoolExecutor(max_workers=10) as executor:  # Adjust max_workers as needed
-    #     future_to_project = {executor.submit(process_project, project: Project): project for project in projects}
-    #     for future in as_completed(future_to_project):
-    #         project = future_to_project[future]
-    #         try:
-    #             data = future.result()
-    #             if data:
-    #                 # Process the data (e.g., append it to a DataFrame or list)
-    #                 pass
-    #         except Exception as e:
-    #             print(f'Error processing project {project.name}: {e}')
