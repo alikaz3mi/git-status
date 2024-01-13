@@ -66,7 +66,7 @@ def get_num_commits_by_branch(project: Project) -> Dict[str, int]:
     return branches_commits
 
 
-def get_ci_cd_stages(project: Project, branch_name='main') -> List[str]:
+def get_ci_cd_stages(project: Project, branch_name='main') -> List[str] | None:
     try:
         # Get the file content
         file_content = project.files.get(file_path='.gitlab-ci.yml', ref=branch_name)
@@ -89,7 +89,7 @@ def has_tests(project: Project) -> bool:
 
 def process_project(project: Project) -> Dict[str, str] | None:
     try:
-        main_developers = dict(Counter([x.author_name for x in project.commits.list(get_all=True, all=True)]))
+        main_developers = dict(Counter([x.author_email.split('@')[0] for x in project.commits.list(get_all=True, all=True)]))
         num_commit_per_branch = get_num_commits_by_branch(project)
         most_committed_branch = max(num_commit_per_branch, key=num_commit_per_branch.get)
         project_files = get_project_file_paths(project, branch_name=most_committed_branch)
@@ -136,7 +136,7 @@ if __name__ == '__main__':
         if group_name not in grouped_projects:
             grouped_projects[group_name] = []
 
-    with ProcessPoolExecutor(max_workers=4) as executor:  # Adjust max_workers as needed
+    with ProcessPoolExecutor(max_workers=8) as executor:  # Adjust max_workers as needed
         future_to_project = {executor.submit(process_project, project): project for project in projects}
         for future in as_completed(future_to_project):
             project = future_to_project[future]
