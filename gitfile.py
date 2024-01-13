@@ -5,7 +5,7 @@ import pandas as pd
 from tqdm import tqdm
 from typing import List, Dict
 from collections import Counter
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed, ProcessPoolExecutor
 
 from gitlab.v4.objects.projects import Project
 
@@ -98,6 +98,7 @@ def process_project(project: Project) -> Dict[str, str] | None:
             'Group Name': project.namespace['name'],
             'Link': project.web_url,
             'Creation Date': project.created_at.split('T')[0],
+            'Last Commit Date': project.last_activity_at.split('T')[0],
             'Number of Commits': len(project.commits.list(get_all=True, all=True)),
             'Number of Branches': len(project.branches.list(get_all=True, all=True)),
             'Commits per Branch': num_commit_per_branch,
@@ -110,9 +111,9 @@ def process_project(project: Project) -> Dict[str, str] | None:
             'Languages': get_language_percentages(project),
             'Has CI / CD': 'yes' if '.gitlab-ci.yml' in project_files else 'no',
             'Has Docker compose': 'yes' if 'docker-compose.yml' in project_files else 'no',
-            'has tests': has_tests(project),
-            # 'Number of connected CI/CD Servers': ...,
-            # 'Technologies': ...
+            'Has Tests': 'yes' if has_tests(project) else 'no',
+            'Number of connected CI/CD Servers': len(project.hooks.list()),
+            'Technologies': ''
         }
         return project_data
     except Exception as e:
@@ -135,7 +136,7 @@ if __name__ == '__main__':
         if group_name not in grouped_projects:
             grouped_projects[group_name] = []
 
-    with ThreadPoolExecutor(max_workers=10) as executor:  # Adjust max_workers as needed
+    with ProcessPoolExecutor(max_workers=4) as executor:  # Adjust max_workers as needed
         future_to_project = {executor.submit(process_project, project): project for project in projects}
         for future in as_completed(future_to_project):
             project = future_to_project[future]
